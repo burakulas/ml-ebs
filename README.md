@@ -34,7 +34,7 @@ python 123_extract_and_train.py
 
 This script automatically runs:
 1. `1_prepare_training_data.py` - Preprocesses light curves
-2. `2_extract_training_features.py` - Extracts 52 features
+2. `2_extract_training_features.py` - Extracts features
 3. `3_train_models.py` - Trains RF and XGBoost models with 5-fold CV
 
 
@@ -64,8 +64,7 @@ python 4a_ogle_prediction.py
 # Predict Kepler catalog
 python 4b_kepler_prediction.py
 ```
-Run the following command to predict parameters from custom light curve data. Ensure your CSV files are located in the custom_data folder with two columns (phase and flux) and a phase range of 0.25 to 1.25.
-**Note:** Prediction scripts use GPU acceleration (CuPy) if available, falling back to CPU otherwise.
+Run the following command to predict parameters from custom light curve data. Ensure your CSV files are located in the custom_data folder with two columns (phase and flux) and a phase range of 0.25 to 1.25. Prediction scripts use GPU acceleration (CuPy) if available, falling back to CPU otherwise.
 
 ```bash
 python 4c_custom_prediction.py
@@ -77,8 +76,8 @@ python 4c_custom_prediction.py
 
 ### Training Pipeline Outputs
 
-- `processed_data/training_data.pkl` - Preprocessed light curves (1000 points each)
-- `processed_data/training_features.pkl` - Extracted features (995 × 52)
+- `processed_data/training_data.pkl` - Preprocessed light curves
+- `processed_data/training_features.pkl` - Extracted features
 - `models/models_rf/` - Random Forest models (5 folds × 6 tasks)
 - `models/models_xgb/` - XGBoost models (5 folds × 6 tasks)
 - `models/models_rf/rf_cv_summary.csv` - Cross-validation results (RF)
@@ -86,8 +85,8 @@ python 4c_custom_prediction.py
 
 ### Prediction Outputs
 
-- `predictions/kepler_predictions/kepler_predictions.csv` - Full Kepler catalog predictions
-- `predictions/ogle_predictions/ogle_predictions.csv` - Full OGLE catalog predictions
+- `predictions/kepler_predictions/kepler_predictions.csv` 
+- `predictions/ogle_predictions/ogle_predictions.csv` 
 - `predictions/custom_predictions/custom_predictions.csv`
 
 
