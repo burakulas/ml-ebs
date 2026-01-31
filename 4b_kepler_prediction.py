@@ -21,9 +21,13 @@ np.seterr(divide='ignore', invalid='ignore')
 # CONFIGURATION
 # =============================================================================
 WORK_DIR = "."
-OGLE_LC_DIR = os.path.join(WORK_DIR, "ogle_data")
+
+# CHANGED: Input Directory for Kepler LCs
+KEPLER_LC_DIR = os.path.join(WORK_DIR, "kepler_data")
 MODEL_DIR = os.path.join(WORK_DIR, "models/models_xgb")
-OUTPUT_DIR = os.path.join(WORK_DIR, "predictions/ogle_predictions")
+
+# CHANGED: Output Directory
+OUTPUT_DIR = os.path.join(WORK_DIR, "predictions/kepler_predictions")
 
 # EXACT KEYS FOUND IN YOUR MODEL
 PARAMS_TO_PREDICT = ['i', 't2_t1', 'q', 'p1', 'p2'] 
@@ -78,51 +82,43 @@ def apply_physics_constraints(star):
     return star
 
 # =============================================================================
-# 2. ROBUST LOADER (FIXED INTERPOLATION)
+# 2. ROBUST LOADER (KEPLER HEADERLESS VERSION)
 # =============================================================================
 def load_and_bin_lc_robust(filepath, n_bins=1000):
     try:
-        # 1. Load Data
-        # We load without headers first to be safe
+        # 1. Load Data (Headerless CSV)
+        # Use header=None so the first row isn't lost
         df = pd.read_csv(filepath, header=None)
         
-        # 2. Handle potential headers by converting to numeric and dropping NaNs
-        # This converts 'phase'/'flux' strings to NaN, then drops that row.
-        df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
-        
-        # 3. Validate Shape (must have at least 2 columns)
+        # 2. Validate Shape
         if df.shape[1] < 2:
             return None
             
-        # 4. Assign Phases (Col 0) and Flux (Col 1)
+        # 3. Assign Phases (Col 0) and Flux (Col 1)
         raw_phase = df.iloc[:, 0].values
         raw_flux = df.iloc[:, 1].values
         
         # KEY ADJUSTMENT: Normalize Phase to 0-1 for Binning
+        # Input is 0.25 - 1.25. We take modulo 1.0 to get 0.0 - 1.0 range.
         phase_folded = raw_phase % 1.0
         
-        # 5. Binning
+        # 4. Binning
         bin_edges = np.linspace(0, 1.0, n_bins + 1)
         flux_binned = np.zeros(n_bins)
         
         for i in range(n_bins):
             mask = (phase_folded >= bin_edges[i]) & (phase_folded < bin_edges[i+1])
-            if np.any(mask):
-                flux_binned[i] = np.median(raw_flux[mask])
-            else:
-                flux_binned[i] = np.nan
+            flux_binned[i] = np.median(raw_flux[mask]) if np.any(mask) else np.nan
 
-        # 6. Fill Gaps
+        # 5. Fill Gaps
         s = pd.Series(flux_binned)
         flux_filled = s.interpolate(method='linear', limit_direction='both').values
         
-        # 7. Smooth
-        try: 
-            flux_smooth = savgol_filter(flux_filled, 31, 3, mode='wrap')
-        except: 
-            flux_smooth = flux_filled
+        # 6. Smooth
+        try: flux_smooth = savgol_filter(flux_filled, 31, 3, mode='wrap')
+        except: flux_smooth = flux_filled
 
-        # 8. Interpolate to Standard View (0.25 - 1.25)
+        # 7. Interpolate to Standard View (0.25 - 1.25)
         phase_grid = np.linspace(0, 1, n_bins, endpoint=False)
         ext_phase = np.concatenate([phase_grid - 1.0, phase_grid, phase_grid + 1.0])
         ext_flux = np.concatenate([flux_smooth, flux_smooth, flux_smooth])
@@ -132,7 +128,7 @@ def load_and_bin_lc_robust(filepath, n_bins=1000):
         target_grid = np.linspace(0.25, 1.25, n_bins)
         flux_final = interp_func(target_grid)
         
-        # 9. Normalize Flux
+        # 8. Normalize Flux
         f_max = np.nanmax(flux_final)
         if f_max <= 0 or np.isnan(f_max): return None
         
@@ -186,7 +182,7 @@ def extract_features(flux):
     return features
 
 # =============================================================================
-# 4. MAIN (SEPARATED CONFIDENCE LOGIC)
+# 4. MAIN
 # =============================================================================
 def main():
     fold_assets = []
@@ -212,7 +208,7 @@ def main():
     # print(f"DEBUG: Model Keys: {list(fold_assets[0]['models'].keys())}")
     # print(f"DEBUG: Predicting: {PARAMS_TO_PREDICT}")
 
-    all_files = [f for f in os.listdir(OGLE_LC_DIR) if f.lower().endswith(('.csv', '.dat'))]
+    all_files = [f for f in os.listdir(KEPLER_LC_DIR) if f.lower().endswith(('.csv', '.dat'))]
     print(f"Processing {len(all_files)} files...")
     results = []
 
@@ -221,7 +217,7 @@ def main():
         batch_features, batch_ids = [], []
 
         for f_name in batch_files:
-            flux = load_and_bin_lc_robust(os.path.join(OGLE_LC_DIR, f_name))
+            flux = load_and_bin_lc_robust(os.path.join(KEPLER_LC_DIR, f_name))
             if flux is not None:
                 batch_features.append(extract_features(flux))
                 batch_ids.append(os.path.splitext(f_name)[0])
@@ -261,29 +257,25 @@ def main():
                 if fold_preds[p]:
                     f_vals = [fold_preds[p][f][idx] for f in range(len(fold_preds[p]))]
                     avg = np.mean(f_vals)
-                    # Conf = 1 - CV (Coefficient of Variation)
                     c = max(0.0, 1.0 - (np.std(f_vals) / (abs(avg) + 1e-6)))
                     star[p] = avg
                     star[f"{p}_conf"] = c
                     conf_vals.append(c) # Add to Average
                 else:
                     star[p], star[f"{p}_conf"] = np.nan, 0.0
-                    conf_vals.append(0.0) # Penalize missing parameter
+                    conf_vals.append(0.0)
 
-            # 2. Morphology (SEPARATE from overall average)
+            # 2. Morphology (Excluded from Average)
             if fold_preds[CLASSIFICATION_PARAM]:
                 m_vals = [int(fold_preds[CLASSIFICATION_PARAM][f][idx]) for f in range(len(fold_preds[CLASSIFICATION_PARAM]))]
                 final_idx = max(set(m_vals), key=m_vals.count)
-                # Map 0->2(Det), 1->5(SD), 2->3(Con)
                 mapping = {0: 2, 1: 5, 2: 3}
                 star['morphology'] = mapping.get(final_idx, final_idx)
                 
                 m_conf = m_vals.count(final_idx) / len(m_vals)
                 star['morph_conf'] = m_conf
-                # conf_vals.append(m_conf) <--- EXCLUDED FROM AVERAGE
             else:
                 star['morphology'], star['morph_conf'] = -1, 0.0
-                # conf_vals.append(0.0) <--- EXCLUDED FROM AVERAGE
 
             # Overall Confidence = Average of PARAMETERS ONLY
             star['overall_confidence'] = np.mean(conf_vals) if conf_vals else 0.0
@@ -293,7 +285,7 @@ def main():
             results.append(star)
 
     if results:
-        output_path = os.path.join(OUTPUT_DIR, "ogle_predictions.csv")
+        output_path = os.path.join(OUTPUT_DIR, "kepler_predictions.csv")
         df_res = pd.DataFrame(results)
         
         # Nicer column order
@@ -303,7 +295,6 @@ def main():
             params.extend([p, f"{p}_conf"])
         
         final_cols = priority + params
-        # Add whatever is left
         remaining = [c for c in df_res.columns if c not in final_cols]
         
         df_res[final_cols + remaining].to_csv(output_path, index=False)

@@ -21,9 +21,9 @@ np.seterr(divide='ignore', invalid='ignore')
 # CONFIGURATION
 # =============================================================================
 WORK_DIR = "."
-OGLE_LC_DIR = os.path.join(WORK_DIR, "ogle_data")
+OGLE_LC_DIR = os.path.join(WORK_DIR, "custom_data")
 MODEL_DIR = os.path.join(WORK_DIR, "models/models_xgb")
-OUTPUT_DIR = os.path.join(WORK_DIR, "predictions/ogle_predictions")
+OUTPUT_DIR = os.path.join(WORK_DIR, "predictions/custom_predictions")
 
 # EXACT KEYS FOUND IN YOUR MODEL
 PARAMS_TO_PREDICT = ['i', 't2_t1', 'q', 'p1', 'p2'] 
@@ -83,56 +83,47 @@ def apply_physics_constraints(star):
 def load_and_bin_lc_robust(filepath, n_bins=1000):
     try:
         # 1. Load Data
-        # We load without headers first to be safe
-        df = pd.read_csv(filepath, header=None)
+        df = pd.read_csv(filepath)
+        df.columns = [c.strip().lower() for c in df.columns]
         
-        # 2. Handle potential headers by converting to numeric and dropping NaNs
-        # This converts 'phase'/'flux' strings to NaN, then drops that row.
-        df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
-        
-        # 3. Validate Shape (must have at least 2 columns)
-        if df.shape[1] < 2:
+        # 2. Validate Headers
+        if 'phase' not in df.columns or 'flux' not in df.columns:
+            # print(f"SKIP {os.path.basename(filepath)}: Missing columns. Found {df.columns}")
             return None
             
-        # 4. Assign Phases (Col 0) and Flux (Col 1)
-        raw_phase = df.iloc[:, 0].values
-        raw_flux = df.iloc[:, 1].values
+        raw_phase, raw_flux = df['phase'].values % 1.0, df['flux'].values
         
-        # KEY ADJUSTMENT: Normalize Phase to 0-1 for Binning
-        phase_folded = raw_phase % 1.0
-        
-        # 5. Binning
+        # 3. Binning
         bin_edges = np.linspace(0, 1.0, n_bins + 1)
         flux_binned = np.zeros(n_bins)
         
         for i in range(n_bins):
-            mask = (phase_folded >= bin_edges[i]) & (phase_folded < bin_edges[i+1])
-            if np.any(mask):
-                flux_binned[i] = np.median(raw_flux[mask])
-            else:
-                flux_binned[i] = np.nan
+            mask = (raw_phase >= bin_edges[i]) & (raw_phase < bin_edges[i+1])
+            flux_binned[i] = np.median(raw_flux[mask]) if np.any(mask) else np.nan
 
-        # 6. Fill Gaps
+        # 4. Fill Gaps
         s = pd.Series(flux_binned)
         flux_filled = s.interpolate(method='linear', limit_direction='both').values
         
-        # 7. Smooth
-        try: 
-            flux_smooth = savgol_filter(flux_filled, 31, 3, mode='wrap')
-        except: 
-            flux_smooth = flux_filled
+        # 5. Smooth
+        try: flux_smooth = savgol_filter(flux_filled, 31, 3, mode='wrap')
+        except: flux_smooth = flux_filled
 
-        # 8. Interpolate to Standard View (0.25 - 1.25)
+        # 6. Interpolate (CRITICAL FIX: endpoint=False to avoid duplicates)
+        # We use endpoint=False so 0.0 is included but 1.0 is not (it wraps to 0)
         phase_grid = np.linspace(0, 1, n_bins, endpoint=False)
+        
         ext_phase = np.concatenate([phase_grid - 1.0, phase_grid, phase_grid + 1.0])
         ext_flux = np.concatenate([flux_smooth, flux_smooth, flux_smooth])
         
+        # Now ext_phase is strictly increasing, PchipInterpolator will work
         interp_func = PchipInterpolator(ext_phase, ext_flux)
         
+        # Target Grid (0.25 to 1.25)
         target_grid = np.linspace(0.25, 1.25, n_bins)
         flux_final = interp_func(target_grid)
         
-        # 9. Normalize Flux
+        # 7. Normalize
         f_max = np.nanmax(flux_final)
         if f_max <= 0 or np.isnan(f_max): return None
         
@@ -293,7 +284,7 @@ def main():
             results.append(star)
 
     if results:
-        output_path = os.path.join(OUTPUT_DIR, "ogle_predictions.csv")
+        output_path = os.path.join(OUTPUT_DIR, "custom_predictions.csv")
         df_res = pd.DataFrame(results)
         
         # Nicer column order
