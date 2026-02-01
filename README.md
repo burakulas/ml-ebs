@@ -55,7 +55,7 @@ python 3_train_models.py
 
 ### Make Predictions on New Data
 
-After training, predict parameters for Kepler or OGLE light curves:
+After training, predict parameters for Kepler or OGLE light curves (check download.txt files in [ogle_data](https://github.com/burakulas/ml-ebs/tree/main/ogle_data) and [kepler_data](https://github.com/burakulas/ml-ebs/tree/main/kepler_data)):
 
 ```bash
 # Predict OGLE catalog
