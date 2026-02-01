@@ -64,7 +64,7 @@ python 4a_ogle_prediction.py
 # Predict Kepler catalog
 python 4b_kepler_prediction.py
 ```
-Run the following command to predict parameters from custom light curve data. Ensure your CSV files are located in the custom_data folder with two columns (phase and flux) and a phase range of 0.25 to 1.25. Prediction scripts use GPU acceleration (CuPy) if available, falling back to CPU otherwise.
+Run the following command to predict parameters from custom light curve data. Ensure your CSV files are located in the [custom_data/](https://github.com/burakulas/detocs/tree/main/models) folder with two columns (phase and flux) and a phase range of 0.25 to 1.25. Prediction scripts use GPU acceleration (CuPy) if available, falling back to CPU otherwise.
 
 ```bash
 python 4c_custom_prediction.py
