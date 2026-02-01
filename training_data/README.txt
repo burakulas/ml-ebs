@@ -1,1 +1,1 @@
-Extract the zip file move the CSV files into this directory.
+Extract the zip file and move the DAT files into this directory.
