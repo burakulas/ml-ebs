@@ -92,21 +92,9 @@ python 4c_custom_prediction.py
 
 ## License
 
-MIT License - See LICENSE file for details
+MIT License - See LICENSE file for details.
 
 ## Contact
 
-For questions or issues, please open a GitHub issue or contact [your-email@domain.com].
+For questions or issues, please open a GitHub issue or contact [burak.ulas@comu.edu.tr].
 
-## Acknowledgments
-
-This work uses data from:
-- CALEB (Catalog of Eclipsing Binaries)
-- DEBCat (Detached Eclipsing Binary Catalog)
-- Kepler Mission
-- OGLE Survey
-
-
----
-
-**Last Updated:** January 2026
