@@ -46,7 +46,7 @@ If you need more control or want to modify individual steps:
 # Step 1: Prepare training data (PCHIP interpolation to 1000 points)
 python 1_prepare_training_data.py
 
-# Step 2: Extract features (52 features per light curve)
+# Step 2: Extract features (51 features per light curve)
 python 2_extract_training_features.py
 
 # Step 3: Train models (5-fold cross-validation)
