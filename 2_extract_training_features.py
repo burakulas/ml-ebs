@@ -38,7 +38,7 @@ def extract_features(flux):
     features['flux_max'] = np.max(flux)
     features['flux_mean'] = np.mean(flux)
     features['flux_std'] = np.std(flux)
-    features['flux_median'] = np.median(flux)
+    # features['flux_median'] = np.median(flux)
     features['flux_range'] = features['flux_max'] - features['flux_min']
     features['flux_skew'] = pd.Series(flux).skew()
     features['flux_kurtosis'] = pd.Series(flux).kurtosis()
