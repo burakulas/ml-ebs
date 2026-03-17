@@ -5,13 +5,22 @@ import numpy as np
 import pandas as pd
 import pickle
 import warnings
-import cupy as cp  
 from scipy.fft import fft
 from scipy.signal import savgol_filter
 from scipy.ndimage import uniform_filter1d
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import brentq
 from tqdm import tqdm
+
+# GPU support: use cupy if available, otherwise fall back to numpy
+try:
+    import cupy as cp
+    GPU_AVAILABLE = True
+    print("GPU (cupy) detected — running on CUDA.")
+except ImportError:
+    import numpy as cp
+    GPU_AVAILABLE = False
+    print("cupy not found — running on CPU.")
 
 # Suppress noise
 warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -25,12 +34,11 @@ OGLE_LC_DIR = os.path.join(WORK_DIR, "ogle_data")
 MODEL_DIR = os.path.join(WORK_DIR, "models/models_xgb")
 OUTPUT_DIR = os.path.join(WORK_DIR, "predictions/ogle_predictions")
 
-# EXACT KEYS FOUND IN YOUR MODEL
-PARAMS_TO_PREDICT = ['i', 't2_t1', 'q', 'p1', 'p2'] 
+PARAMS_TO_PREDICT = ['i', 't2_t1', 'q', 'p1', 'p2']
 CLASSIFICATION_PARAM = 'morphology_classifier'
 
 N_FOLDS = 5
-BATCH_SIZE = 1000  
+BATCH_SIZE = 1000
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -52,59 +60,50 @@ def apply_physics_constraints(star):
     m_code = star.get('morphology', -1)
     q = star.get('q', np.nan)
     if np.isnan(q) or q <= 0: return star
-    
+
     omega_in = calculate_omega_in(q)
     if omega_in is None: return star
-    
-    if m_code == 3: # CONTACT
+
+    if m_code == 3:  # CONTACT
         star['p1'] = omega_in
         star['p2'] = omega_in
         star['physics_note'] = "Contact: Forced p1=p2=Omega_in"
-    elif m_code == 5: # SEMI-DETACHED
+    elif m_code == 5:  # SEMI-DETACHED
         star['p2'] = omega_in
         if star['p1'] <= omega_in:
             star['p1'] = omega_in * 1.05
             star['physics_note'] = "Semi-Det: Fixed p2, Forced p1 detached"
         else:
             star['physics_note'] = "Semi-Det: Fixed p2"
-    elif m_code == 2: # DETACHED
+    elif m_code == 2:  # DETACHED
         updated = False
         if star['p1'] <= omega_in:
             star['p1'] = omega_in * 1.05; updated = True
         if star['p2'] <= omega_in:
             star['p2'] = omega_in * 1.05; updated = True
         star['physics_note'] = "Detached: Constraints applied" if updated else "Detached: OK"
-        
+
     return star
 
 # =============================================================================
-# 2. ROBUST LOADER (FIXED INTERPOLATION)
+# 2. ROBUST LOADER
 # =============================================================================
 def load_and_bin_lc_robust(filepath, n_bins=1000):
     try:
-        # 1. Load Data
-        # We load without headers first to be safe
         df = pd.read_csv(filepath, header=None)
-        
-        # 2. Handle potential headers by converting to numeric and dropping NaNs
-        # This converts 'phase'/'flux' strings to NaN, then drops that row.
         df = df.apply(pd.to_numeric, errors='coerce').dropna().reset_index(drop=True)
-        
-        # 3. Validate Shape (must have at least 2 columns)
+
         if df.shape[1] < 2:
             return None
-            
-        # 4. Assign Phases (Col 0) and Flux (Col 1)
+
         raw_phase = df.iloc[:, 0].values
         raw_flux = df.iloc[:, 1].values
-        
-        # KEY ADJUSTMENT: Normalize Phase to 0-1 for Binning
+
         phase_folded = raw_phase % 1.0
-        
-        # 5. Binning
+
         bin_edges = np.linspace(0, 1.0, n_bins + 1)
         flux_binned = np.zeros(n_bins)
-        
+
         for i in range(n_bins):
             mask = (phase_folded >= bin_edges[i]) & (phase_folded < bin_edges[i+1])
             if np.any(mask):
@@ -112,34 +111,29 @@ def load_and_bin_lc_robust(filepath, n_bins=1000):
             else:
                 flux_binned[i] = np.nan
 
-        # 6. Fill Gaps
         s = pd.Series(flux_binned)
         flux_filled = s.interpolate(method='linear', limit_direction='both').values
-        
-        # 7. Smooth
-        try: 
+
+        try:
             flux_smooth = savgol_filter(flux_filled, 31, 3, mode='wrap')
-        except: 
+        except:
             flux_smooth = flux_filled
 
-        # 8. Interpolate to Standard View (0.25 - 1.25)
         phase_grid = np.linspace(0, 1, n_bins, endpoint=False)
         ext_phase = np.concatenate([phase_grid - 1.0, phase_grid, phase_grid + 1.0])
         ext_flux = np.concatenate([flux_smooth, flux_smooth, flux_smooth])
-        
+
         interp_func = PchipInterpolator(ext_phase, ext_flux)
-        
+
         target_grid = np.linspace(0.25, 1.25, n_bins)
         flux_final = interp_func(target_grid)
-        
-        # 9. Normalize Flux
+
         f_max = np.nanmax(flux_final)
         if f_max <= 0 or np.isnan(f_max): return None
-        
+
         return flux_final / f_max
 
-    except Exception as e:
-        # print(f"Error processing {os.path.basename(filepath)}: {e}")
+    except Exception:
         return None
 
 # =============================================================================
@@ -149,7 +143,7 @@ def extract_features(flux):
     features = {}
     baseline_flux = np.nanmedian(flux)
     flux_min, flux_max = np.nanmin(flux), np.nanmax(flux)
-    
+
     features.update({
         'baseline': baseline_flux, 'flux_min': flux_min, 'flux_max': flux_max,
         'flux_mean': np.nanmean(flux), 'flux_std': np.nanstd(flux),
@@ -160,15 +154,15 @@ def extract_features(flux):
     flux_smooth = uniform_filter1d(np.nan_to_num(flux, nan=baseline_flux), size=5, mode='wrap')
     min1_idx = np.argmin(flux_smooth)
     min1_depth = baseline_flux - flux_smooth[min1_idx]
-    
+
     mask_width = int(0.15 * len(flux))
     flux_masked = flux_smooth.copy()
     indices = (np.arange(len(flux)) - min1_idx) % len(flux)
     flux_masked[(indices < mask_width) | (indices > len(flux)-mask_width)] = np.nan
-    
+
     min2_idx = np.nanargmin(flux_masked) if not np.all(np.isnan(flux_masked)) else min1_idx
     min2_depth = baseline_flux - flux_smooth[min2_idx]
-    
+
     p_depth, s_depth = max(min1_depth, min2_depth), min(min1_depth, min2_depth)
     features['primary_depth'] = p_depth
     features['secondary_depth'] = s_depth
@@ -179,14 +173,14 @@ def extract_features(flux):
     for k in range(1, 11):
         features[f'fourier_amp_{k}'] = 2.0 * np.abs(fft_vals[k]) / len(flux)
         if k <= 3: features[f'fourier_phase_{k}'] = np.angle(fft_vals[k])
-    
+
     f1 = features.get('fourier_amp_1', 1e-9)
-    for k in [2, 3, 4]: features[f'fourier_ratio_{k}_1'] = features.get(f'fourier_amp_{k}',0) / f1
+    for k in [2, 3, 4]: features[f'fourier_ratio_{k}_1'] = features.get(f'fourier_amp_{k}', 0) / f1
 
     return features
 
 # =============================================================================
-# 4. MAIN (SEPARATED CONFIDENCE LOGIC)
+# 4. MAIN
 # =============================================================================
 def main():
     fold_assets = []
@@ -207,10 +201,6 @@ def main():
     if not fold_assets:
         print("Error: No models loaded.")
         return
-
-    # DEBUG CHECK
-    # print(f"DEBUG: Model Keys: {list(fold_assets[0]['models'].keys())}")
-    # print(f"DEBUG: Predicting: {PARAMS_TO_PREDICT}")
 
     all_files = [f for f in os.listdir(OGLE_LC_DIR) if f.lower().endswith(('.csv', '.dat'))]
     print(f"Processing {len(all_files)} files...")
@@ -233,8 +223,7 @@ def main():
 
         for assets in fold_assets:
             scaler, models_dict = assets['scaler'], assets['models']
-            
-            # Feature alignment
+
             if assets['feature_names']:
                 X_fold = X_df.reindex(columns=assets['feature_names'], fill_value=0.0)
             else:
@@ -242,70 +231,59 @@ def main():
 
             try: X_scaled = scaler.transform(X_fold)
             except: X_scaled = scaler.transform(X_fold.values)
-            
-            X_gpu = cp.array(X_scaled, dtype='float32')
-            
-            # Predict
+
             for p in PARAMS_TO_PREDICT + [CLASSIFICATION_PARAM]:
                 if p in models_dict:
-                    models_dict[p].set_params(device="cuda:0")
-                    fold_preds[p].append(cp.asnumpy(models_dict[p].predict(X_gpu)))
+                    if GPU_AVAILABLE:
+                        models_dict[p].set_params(device="cuda:0")
+                        X_input = cp.array(X_scaled, dtype='float32')
+                        preds = cp.asnumpy(models_dict[p].predict(X_input))
+                    else:
+                        models_dict[p].set_params(device="cpu")
+                        preds = models_dict[p].predict(X_scaled)
+                    fold_preds[p].append(preds)
 
-        # Aggregate
         for idx in range(len(batch_ids)):
             star = {'id': batch_ids[idx]}
-            conf_vals = [] # Only stores parameter confidences
-            
-            # 1. Regression Params
+            conf_vals = []
+
             for p in PARAMS_TO_PREDICT:
                 if fold_preds[p]:
                     f_vals = [fold_preds[p][f][idx] for f in range(len(fold_preds[p]))]
                     avg = np.mean(f_vals)
-                    # Conf = 1 - CV (Coefficient of Variation)
                     c = max(0.0, 1.0 - (np.std(f_vals) / (abs(avg) + 1e-6)))
                     star[p] = avg
                     star[f"{p}_conf"] = c
-                    conf_vals.append(c) # Add to Average
+                    conf_vals.append(c)
                 else:
                     star[p], star[f"{p}_conf"] = np.nan, 0.0
-                    conf_vals.append(0.0) # Penalize missing parameter
+                    conf_vals.append(0.0)
 
-            # 2. Morphology (SEPARATE from overall average)
             if fold_preds[CLASSIFICATION_PARAM]:
                 m_vals = [int(fold_preds[CLASSIFICATION_PARAM][f][idx]) for f in range(len(fold_preds[CLASSIFICATION_PARAM]))]
                 final_idx = max(set(m_vals), key=m_vals.count)
-                # Map 0->2(Det), 1->5(SD), 2->3(Con)
                 mapping = {0: 2, 1: 5, 2: 3}
                 star['morphology'] = mapping.get(final_idx, final_idx)
-                
-                m_conf = m_vals.count(final_idx) / len(m_vals)
-                star['morph_conf'] = m_conf
-                # conf_vals.append(m_conf) <--- EXCLUDED FROM AVERAGE
+                star['morph_conf'] = m_vals.count(final_idx) / len(m_vals)
             else:
                 star['morphology'], star['morph_conf'] = -1, 0.0
-                # conf_vals.append(0.0) <--- EXCLUDED FROM AVERAGE
 
-            # Overall Confidence = Average of PARAMETERS ONLY
             star['overall_confidence'] = np.mean(conf_vals) if conf_vals else 0.0
-            
-            # Physics Constraints
             star = apply_physics_constraints(star)
             results.append(star)
 
     if results:
         output_path = os.path.join(OUTPUT_DIR, "ogle_predictions.csv")
         df_res = pd.DataFrame(results)
-        
-        # Nicer column order
+
         priority = ['id', 'morphology', 'morph_conf', 'overall_confidence', 'physics_note']
         params = []
         for p in PARAMS_TO_PREDICT:
             params.extend([p, f"{p}_conf"])
-        
+
         final_cols = priority + params
-        # Add whatever is left
         remaining = [c for c in df_res.columns if c not in final_cols]
-        
+
         df_res[final_cols + remaining].to_csv(output_path, index=False)
         print(f"Saved {len(results)} predictions to {output_path}")
 
