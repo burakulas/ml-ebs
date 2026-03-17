@@ -9,7 +9,7 @@ A machine learning framework for predicting physical parameters and morphologica
 
 - Python 3.7+
 - 8GB+ RAM recommended
-- Optional: CUDA-compatible GPU for faster Kepler/OGLE predictions (CuPy)
+- Optional: CUDA-compatible GPU for faster training and predictions (CuPy)
 
 ### Install Dependencies
 
@@ -26,7 +26,7 @@ pip install cupy-cuda11x  # Replace 11x with your CUDA version
 
 ### Option 1: Run Complete Pipeline (Recommended)
 
-Execute the combined script to run data preparation, feature extraction, and training sequentially:
+Execute the combined script to run data preparation, feature extraction, and training sequentially (models/held_out_data.pkl is included in this repository. When present, 3_train_models.py loads it directly to ensure the exact same 845/150 train/test split used in the paper. If deleted, a fresh stratified split will be created automatically).:
 
 ```bash
 python 123_extract_and_train.py
@@ -49,7 +49,7 @@ python 1_prepare_training_data.py
 # Step 2: Extract features (51 features per light curve)
 python 2_extract_training_features.py
 
-# Step 3: Train models (5-fold cross-validation)
+# Step 3: Train models (Trains RF and XGBoost models with 5-fold CV on 845 systems - 150 held out for final evaluation)
 python 3_train_models.py
 ```
 
@@ -82,6 +82,7 @@ python 4c_custom_prediction.py
 - `models/models_xgb/` - XGBoost models (5 folds × 6 tasks)
 - `models/models_rf/rf_cv_summary.csv` - Cross-validation results (RF)
 - `models/models_xgb/xgb_cv_summary.csv` - Cross-validation results (XGB)
+- 'models/held_out_data.pkl'  - Held-out test set (150 systems, pre-defined for reproducibility)
 
 ### Prediction Outputs
 
