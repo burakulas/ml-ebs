@@ -4,12 +4,24 @@ import os
 import numpy as np
 import pandas as pd
 import pickle
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.metrics import (mean_absolute_error, mean_squared_error, r2_score,
                             accuracy_score, confusion_matrix, f1_score, classification_report)
 import xgboost as xgb
+
+# =============================================================================
+# GPU DETECTION
+# =============================================================================
+try:
+    import cupy as cp
+    cp.array([1])  # test actual GPU access
+    GPU_AVAILABLE = True
+    print("GPU (cupy) detected — XGBoost will use CUDA.")
+except Exception:
+    GPU_AVAILABLE = False
+    print("No GPU detected — XGBoost will run on CPU.")
 
 # =============================================================================
 # CONFIGURATION
@@ -19,10 +31,12 @@ WORK_DIR = "."
 INPUT_FILE = os.path.join(WORK_DIR, "processed_data/training_features.pkl")
 OUTPUT_DIR_RF = os.path.join(WORK_DIR, "models/models_rf")
 OUTPUT_DIR_XGB = os.path.join(WORK_DIR, "models/models_xgb")
+HELD_OUT_DIR = os.path.join(WORK_DIR, "models")
 
 PARAMS_TO_TRAIN = ['i', 't2_t1', 'q', 'p1', 'p2']
 N_FOLDS = 5
 RANDOM_SEED = 42
+HELD_OUT_FRACTION = 0.15  # 15% held-out test set
 
 RF_PARAMS = {
     'n_estimators': 500,
@@ -43,7 +57,8 @@ XGB_PARAMS = {
     'reg_alpha': 0.1,
     'reg_lambda': 0.1,
     'random_state': RANDOM_SEED,
-    'n_jobs': -1
+    'n_jobs': -1,
+    'device': 'cuda' if GPU_AVAILABLE else 'cpu'
 }
 
 # Classification parameters
@@ -66,7 +81,8 @@ XGB_CLF_PARAMS = {
     'random_state': RANDOM_SEED,
     'n_jobs': -1,
     'objective': 'multi:softmax',
-    'num_class': 3
+    'num_class': 3,
+    'device': 'cuda' if GPU_AVAILABLE else 'cpu'
 }
 
 # =============================================================================
@@ -80,12 +96,14 @@ def train_fold(X_train, X_val, y_train, y_val, model_type='xgb'):
         model = RandomForestRegressor(**RF_PARAMS)
         model.fit(X_train, y_train)
     else:  # xgb
+        X_train_xgb = cp.array(X_train, dtype='float32')
+        X_val_xgb = cp.array(X_val, dtype='float32')
         model = xgb.XGBRegressor(**XGB_PARAMS)
-        model.fit(X_train, y_train,
-                 eval_set=[(X_val, y_val)],
+        model.fit(X_train_xgb, y_train,
+                 eval_set=[(X_val_xgb, y_val)],
                  verbose=False)
 
-    y_pred = model.predict(X_val)
+    y_pred = model.predict(X_val_xgb if model_type != 'rf' else X_val)
 
     r2 = r2_score(y_val, y_pred)
     mae = mean_absolute_error(y_val, y_pred)
@@ -101,12 +119,14 @@ def train_classification_fold(X_train, X_val, y_train, y_val, model_type='xgb'):
         model = RandomForestClassifier(**RF_CLF_PARAMS)
         model.fit(X_train, y_train)
     else:  # xgb
+        X_train_xgb = cp.array(X_train, dtype='float32')
+        X_val_xgb = cp.array(X_val, dtype='float32')
         model = xgb.XGBClassifier(**XGB_CLF_PARAMS)
-        model.fit(X_train, y_train,
-                 eval_set=[(X_val, y_val)],
+        model.fit(X_train_xgb, y_train,
+                 eval_set=[(X_val_xgb, y_val)],
                  verbose=False)
 
-    y_pred = model.predict(X_val)
+    y_pred = model.predict(X_val_xgb if model_type != 'rf' else X_val)
 
     accuracy = accuracy_score(y_val, y_pred)
     f1_macro = f1_score(y_val, y_pred, average='macro')
@@ -307,6 +327,7 @@ def train_model_type(model_type, X, params_df, feature_names, folds, output_dir)
 def main():
     print("=" * 80)
     print("SCRIPT 03: TRAIN RANDOM FOREST AND XGBOOST MODELS")
+    print("  WITH 15% HELD-OUT TEST SET")
     print("=" * 80)
 
     # Load
@@ -321,16 +342,89 @@ def main():
     print(f"Features: {X.shape}")
     print(f"Parameters to train: {PARAMS_TO_TRAIN}")
 
-    # Create folds (stratified by morphology)
-    print(f"\nCreating {N_FOLDS}-fold CV splits...")
+    # =========================================================================
+    # HELD-OUT TEST SPLIT
+    # If held_out_data.pkl exists, load it directly (reproduces paper exactly).
+    # Otherwise, create a fresh 15% stratified split and save it.
+    # =========================================================================
+    os.makedirs(HELD_OUT_DIR, exist_ok=True)
+    held_out_file = os.path.join(HELD_OUT_DIR, "held_out_data.pkl")
+
+    if os.path.exists(held_out_file):
+        print(f"\n{'='*80}")
+        print(f"HELD-OUT SPLIT")
+        print(f"{'='*80}")
+        print(f"  Loading pre-defined split from: {held_out_file}")
+        print(f"  (Reproduces paper results exactly)")
+        with open(held_out_file, 'rb') as f:
+            held_out_data = pickle.load(f)
+        X_cv = held_out_data['cv_features']
+        params_cv = held_out_data['cv_params']
+        held_out_indices = held_out_data['held_out_indices']
+        cv_indices = held_out_data['cv_indices']
+        print(f"  CV set:        {len(X_cv)} samples")
+        print(f"  Held-out test: {len(held_out_indices)} samples")
+    else:
+        print(f"\n{'='*80}")
+        print(f"HELD-OUT SPLIT")
+        print(f"{'='*80}")
+        print(f"  No held_out_data.pkl found — creating fresh 15% split.")
+        morphology = params_df['morphology'].values
+        all_indices = np.arange(len(X))
+
+        cv_indices, held_out_indices = train_test_split(
+            all_indices,
+            test_size=HELD_OUT_FRACTION,
+            stratify=morphology,
+            random_state=RANDOM_SEED
+        )
+        cv_indices = np.sort(cv_indices)
+        held_out_indices = np.sort(held_out_indices)
+
+        print(f"  Total samples:    {len(X)}")
+        print(f"  CV set:           {len(cv_indices)} ({100*len(cv_indices)/len(X):.1f}%)")
+        print(f"  Held-out test:    {len(held_out_indices)} ({100*len(held_out_indices)/len(X):.1f}%)")
+
+        print(f"\n  Morphology distribution:")
+        for morph in ['detached', 'semidetached', 'contact']:
+            n_cv = np.sum(morphology[cv_indices] == morph)
+            n_test = np.sum(morphology[held_out_indices] == morph)
+            print(f"    {morph:12s}: CV={n_cv}, Test={n_test} "
+                  f"(CV {100*n_cv/len(cv_indices):.1f}%, Test {100*n_test/len(held_out_indices):.1f}%)")
+
+        X_cv = X.iloc[cv_indices].reset_index(drop=True)
+        params_cv = params_df.iloc[cv_indices].reset_index(drop=True)
+
+        held_out_data = {
+            'held_out_indices': held_out_indices,
+            'cv_indices': cv_indices,
+            'held_out_features': X.iloc[held_out_indices].reset_index(drop=True),
+            'held_out_params': params_df.iloc[held_out_indices].reset_index(drop=True),
+            'cv_features': X_cv,
+            'cv_params': params_cv,
+            'feature_names': feature_names,
+            'held_out_fraction': HELD_OUT_FRACTION,
+            'random_seed': RANDOM_SEED
+        }
+        with open(held_out_file, 'wb') as f:
+            pickle.dump(held_out_data, f)
+        print(f"\n  Saved held-out data: {held_out_file}")
+        np.save(os.path.join(HELD_OUT_DIR, "held_out_indices.npy"), held_out_indices)
+        np.save(os.path.join(HELD_OUT_DIR, "cv_indices.npy"), cv_indices)
+        print(f"  Saved index files: held_out_indices.npy, cv_indices.npy")
+
+    # =========================================================================
+    # CV FOLDS — only on the CV subset (85%)
+    # =========================================================================
+    morphology_cv = params_cv['morphology'].values
+
+    print(f"\nCreating {N_FOLDS}-fold CV splits on {len(X_cv)} CV samples...")
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_SEED)
+    folds = list(skf.split(X_cv, morphology_cv))
 
-    morphology = params_df['morphology'].values
-    folds = list(skf.split(X, morphology))
-
-    # Train both models
-    rf_results = train_model_type('rf', X, params_df, feature_names, folds, OUTPUT_DIR_RF)
-    xgb_results = train_model_type('xgb', X, params_df, feature_names, folds, OUTPUT_DIR_XGB)
+    # Train both models (on CV subset only)
+    rf_results = train_model_type('rf', X_cv, params_cv, feature_names, folds, OUTPUT_DIR_RF)
+    xgb_results = train_model_type('xgb', X_cv, params_cv, feature_names, folds, OUTPUT_DIR_XGB)
 
     # Comparison
     print("\n" + "=" * 80)
@@ -376,6 +470,7 @@ def main():
 
     print("\n" + "=" * 80)
     print("TRAINING COMPLETE")
+    print(f"  Held-out test set ({len(held_out_indices)} samples) saved for evaluation by 5g_held_out_evaluation.py")
     print("=" * 80)
 
 
