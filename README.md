@@ -37,6 +37,8 @@ This script automatically runs:
 2. `2_extract_training_features.py` - Extracts features
 3. `3_train_models.py` - Trains RF and XGBoost models with 5-fold CV
 
+To additionally reproduce the held-out test results and figures from the paper:                                         
+`python 5_held_out_evaluation.py`
 
 ### Option 2: Run Scripts Separately (Alternative)
 
@@ -51,6 +53,9 @@ python 2_extract_training_features.py
 
 # Step 3: Train models (Trains RF and XGBoost models with 5-fold CV on 845 systems - 150 held out for final evaluation)
 python 3_train_models.py
+
+# Step 4: Evaluate on held-out test set                                 
+python 5_held_out_evaluation.py
 ```
 
 ### Make Predictions on New Data
