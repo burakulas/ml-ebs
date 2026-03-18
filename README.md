@@ -87,7 +87,7 @@ python 4c_custom_prediction.py
 - `models/models_xgb/` - XGBoost models (5 folds × 6 tasks)
 - `models/models_rf/rf_cv_summary.csv` - Cross-validation results (RF)
 - `models/models_xgb/xgb_cv_summary.csv` - Cross-validation results (XGB)
-- 'models/held_out_data.pkl'  - Held-out test set (150 systems, pre-defined for reproducibility)
+- `models/held_out_data.pkl`  - Held-out test set (150 systems, pre-defined for reproducibility)
 
 ### Prediction Outputs
 
