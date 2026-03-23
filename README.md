@@ -26,7 +26,7 @@ pip install cupy-cuda11x  # Replace 11x with your CUDA version
 
 ### Option 1: Run Complete Pipeline (Recommended)
 
-Execute the combined script to run data preparation, feature extraction, and training sequentially (models/held_out_data.pkl is included in this repository. When present, 3_train_models.py loads it directly to ensure the exact same 845/150 train/test split used in the paper. If deleted, a fresh stratified split will be created automatically).:
+Execute the combined script to run data preparation, feature extraction, and training sequentially. `models/held_out_data.pkl` is included in this repository. When present, `3_train_models.py` loads it directly to ensure the exact same 845/150 train/test split used in the paper. If deleted, a fresh stratified split will be created automatically.
 
 ```bash
 python 123_extract_and_train.py
@@ -34,13 +34,10 @@ python 123_extract_and_train.py
 
 This script automatically runs:
 1. `1_prepare_training_data.py` - Preprocesses light curves
-2. `2_extract_training_features.py` - Extracts features
+2. `2_extract_training_features.py` - Extracts 51 features per light curve
 3. `3_train_models.py` - Trains RF and XGBoost models with 5-fold CV
 
-To additionally reproduce the held-out test results and figures from the paper:                                         
-`python 5_held_out_evaluation.py`
-
-### Option 2: Run Scripts Separately (Alternative)
+### Option 2: Run Scripts Separately
 
 If you need more control or want to modify individual steps:
 
@@ -51,16 +48,13 @@ python 1_prepare_training_data.py
 # Step 2: Extract features (51 features per light curve)
 python 2_extract_training_features.py
 
-# Step 3: Train models (Trains RF and XGBoost models with 5-fold CV on 845 systems - 150 held out for final evaluation)
+# Step 3: Train models (RF and XGBoost, 5-fold CV on 845 systems, 150 held out)
 python 3_train_models.py
-
-# Step 4: Evaluate on held-out test set                                 
-python 5_held_out_evaluation.py
 ```
 
 ### Make Predictions on New Data
 
-After training, you can predict parameters for OGLE and Kepler light curves. Please refer to the download.txt files located in the [ogle_data](https://github.com/burakulas/ml-ebs/tree/main/ogle_data) and [kepler_data](https://github.com/burakulas/ml-ebs/tree/main/kepler_data) directories to access the necessary datasets.
+After training, predict parameters for OGLE, Kepler, or custom light curves. Prediction scripts use GPU acceleration (CuPy) if available, falling back to CPU otherwise. Refer to the `download.txt` files in [ogle_data](https://github.com/burakulas/ml-ebs/tree/main/ogle_data) and [kepler_data](https://github.com/burakulas/ml-ebs/tree/main/kepler_data) to access the necessary datasets.
 
 ```bash
 # Predict OGLE catalog
@@ -68,37 +62,55 @@ python 4a_ogle_prediction.py
 
 # Predict Kepler catalog
 python 4b_kepler_prediction.py
-```
-Run the following command to predict parameters from custom light curve data. Ensure your CSV files are located in the [custom_data/](https://github.com/burakulas/ml-ebs/tree/main/custom_data) folder with two columns (phase and flux) and a phase range of 0.25 to 1.25. Prediction scripts use GPU acceleration (CuPy) if available, falling back to CPU otherwise.
 
-```bash
+# Predict custom light curves
 python 4c_custom_prediction.py
 ```
 
+For custom predictions, place your CSV files in the [custom_data/](https://github.com/burakulas/ml-ebs/tree/main/custom_data) folder. Each file must have two columns: `phase` and `flux` (with header row).
 
+### Compute Mahalanobis Distance
+
+After predictions, you can assess prediction reliability by computing Mahalanobis distance. This measures how far each system's features are from the training distribution; systems with high distance are out-of-distribution and predictions may be less reliable.
+
+```bash
+# Step 1: Extract features for distance computation
+python 5a_extract_ogle_features.py
+python 5b_extract_kepler_features.py
+
+# Step 2: Compute distances and merge with predictions
+python 6_compute_mahalanobis.py
+```
 
 ## Output Files
 
-### Training Pipeline Outputs
+### Training Pipeline
 
 - `processed_data/training_data.pkl` - Preprocessed light curves
 - `processed_data/training_features.pkl` - Extracted features
-- `models/models_rf/` - Random Forest models (5 folds × 6 tasks)
-- `models/models_xgb/` - XGBoost models (5 folds × 6 tasks)
+- `models/models_rf/` - Random Forest models (5 folds x 6 tasks)
+- `models/models_xgb/` - XGBoost models (5 folds x 6 tasks)
 - `models/models_rf/rf_cv_summary.csv` - Cross-validation results (RF)
 - `models/models_xgb/xgb_cv_summary.csv` - Cross-validation results (XGB)
-- `models/held_out_data.pkl`  - Held-out test set (150 systems, pre-defined for reproducibility)
+- `models/held_out_data.pkl` - Held-out test set (150 systems, pre-defined for reproducibility)
 
-### Prediction Outputs
+### Predictions
 
-- `predictions/kepler_predictions/kepler_predictions.csv` 
-- `predictions/ogle_predictions/ogle_predictions.csv` 
+- `predictions/ogle_predictions/ogle_predictions.csv`
+- `predictions/kepler_predictions/kepler_predictions.csv`
 - `predictions/custom_predictions/custom_predictions.csv`
 
+### Mahalanobis Distance
+
+- `ogle_features.pkl` - OGLE feature vectors
+- `kepler_features.pkl` - Kepler feature vectors
+- `ogle_predictions_with_distance.csv` - OGLE predictions with Mahalanobis distance
+- `kepler_predictions_with_distance.csv` - Kepler predictions with Mahalanobis distance
+- `mahalanobis_summary.txt` - Distance summary statistics
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT License - See licence.txt for details.
 
 ## Contact
 
