@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-Predict eclipsing binary parameters for custom (user-provided) light curves.
-
-Input format: CSV files with 'phase' and 'flux' columns (header required).
-Identical pipeline to 4a/4b but with a header-aware loader.
-
-Input:  custom_data/*.csv          (phase-folded light curves)
-        models/models_xgb/         (trained XGBoost fold models)
-Output: predictions/custom_predictions/custom_predictions.csv
-"""
 
 import os
 import numpy as np
