@@ -81,7 +81,13 @@ python 5b_extract_kepler_features.py
 # Step 2: Compute distances and merge with predictions
 python 6_compute_mahalanobis.py
 ```
-
+### Evaluate on Held-Out Test Set                                                                                                          
+                                                                                                                                             
+After training, you can evaluate model performance on the 150-system held-out test set. This script loads the trained RF and XGBoost models, makes predictions on the held-out data, and reports R² scores and classification metrics.         
+                                                                                                                                             
+```bash                        
+python 5_held_out_evaluation.py
+```
 ## Output Files
 
 ### Training Pipeline
@@ -93,6 +99,7 @@ python 6_compute_mahalanobis.py
 - `models/models_rf/rf_cv_summary.csv` - Cross-validation results (RF)
 - `models/models_xgb/xgb_cv_summary.csv` - Cross-validation results (XGB)
 - `models/held_out_data.pkl` - Held-out test set (150 systems, pre-defined for reproducibility)
+- `models/held_out_evaluation_results.csv` - Held-out R² and classification metrics
 
 ### Predictions
 
