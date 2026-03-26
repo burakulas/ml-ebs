@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-5g_held_out_evaluation.py — Final evaluation on the held-out 15% test set (M4, m6)
-
-"""
 
 import os
 import numpy as np
